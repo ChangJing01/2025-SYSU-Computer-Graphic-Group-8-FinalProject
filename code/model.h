@@ -32,6 +32,7 @@ public:
     vector<Mesh>    meshes;
     string directory;
     bool gammaCorrection;
+    bool gltf;
     
     // 新增：模型变换相关属性
     glm::vec3 position;       // 模型位置
@@ -39,8 +40,8 @@ public:
     glm::vec3 scale;          // 模型缩放
     glm::mat4 modelMatrix;    // 模型矩阵
 
-    // 构造函数，传入模型文件路径和伽马校正参数
-    Model(string const& path, bool gamma = false) : gammaCorrection(gamma)
+    // 构造函数，传入模型文件路径和伽马校正参数，确定是否加载gltf模型
+    Model(string const& path, bool gamma = false, bool gltf = false) : gammaCorrection(gamma), gltf(gltf)
     {
         // 初始化变换属性
         position = glm::vec3(0.0f, 0.0f, 0.0f);
@@ -56,6 +57,8 @@ public:
     void Draw(Shader& shader, float metallic = 0.5, float roughness = 0.5, float ao = 1.0)
     {
         // 设置模型矩阵到着色器
+        updateModelMatrix();
+        shader.setBool("gltf", gltf);
         shader.setMat4("model", modelMatrix);
         shader.setFloat("defaultMetallic", metallic);
         shader.setFloat("defaultRoughness", roughness);
@@ -65,67 +68,85 @@ public:
             meshes[i].Draw(shader);
     }
 
-    // 新增：移动模型（相对移动）
+    //移动模型（相对移动）
     void Move(glm::vec3 offset)
     {
         position += offset;
-        updateModelMatrix();
     }
 
-    // 新增：设置模型位置（绝对位置）
+    // 设置模型位置（绝对位置）
     void SetPosition(glm::vec3 newPosition)
     {
         position = newPosition;
-        updateModelMatrix();
     }
 
-    // 新增：获取当前位置
+    // 获取当前位置
     glm::vec3 GetPosition() const
     {
         return position;
     }
 
-    // 新增：旋转模型
+    //旋转模型
     void Rotate(glm::vec3 eulerAngles)
     {
         rotation += eulerAngles;
-        updateModelMatrix();
     }
 
-    // 新增：设置模型缩放
+    //设置模型缩放
     void SetScale(glm::vec3 newScale)
     {
         scale = newScale;
-        updateModelMatrix();
     }
 
-    // 新增：重置模型变换
+    //重置模型变换
     void ResetTransform()
     {
         position = glm::vec3(0.0f);
         rotation = glm::vec3(0.0f);
         scale = glm::vec3(1.0f);
-        updateModelMatrix();
     }
 
 private:
-    // 加载模型（原有代码不变）
+    // 加载模型
     void loadModel(string const& path)
     {
         Assimp::Importer importer;
-        const aiScene* scene = importer.ReadFile(path, aiProcess_Triangulate | aiProcess_GenSmoothNormals | aiProcess_FlipUVs | aiProcess_CalcTangentSpace);
-        
-        if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode)
+        if (!gltf)
         {
-            cout << "ERROR::ASSIMP:: " << importer.GetErrorString() << endl;
-            return;
+            const aiScene* scene = importer.ReadFile(path, aiProcess_Triangulate | aiProcess_GenSmoothNormals | aiProcess_FlipUVs | aiProcess_CalcTangentSpace);
+            if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode)
+            {
+                cout << "ERROR::ASSIMP:: " << importer.GetErrorString() << endl;
+                return;
+            }
+
+            directory = path.substr(0, path.find_last_of('/'));
+            processNode(scene->mRootNode, scene);
         }
-        
-        directory = path.substr(0, path.find_last_of('/'));
-        processNode(scene->mRootNode, scene);
+        else
+        {
+            Assimp::Importer importer;
+            // 关键：Assimp后处理选项（适配GLTF）
+            const aiScene* scene = importer.ReadFile(path,
+                aiProcess_Triangulate           // 三角化
+                | aiProcess_GenSmoothNormals    // 生成法线
+                | aiProcess_CalcTangentSpace    // 生成切线/副切线
+                | aiProcess_JoinIdenticalVertices // 合并重复顶点
+                | aiProcess_PopulateArmatureData // 骨骼数据（若有）
+                | aiProcess_ValidateDataStructure// 验证GLTF结构
+                | aiProcess_FlipUVs //UV分解
+            );
+
+            if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
+                std::cerr << "Assimp加载GLTF失败: " << importer.GetErrorString() << std::endl;
+                return;
+            }
+            directory = path.substr(0, path.find_last_of('/'));
+            processNode(scene->mRootNode, scene);
+        }
     }
 
-    // 处理节点（原有代码不变）
+    // 处理节点
     void processNode(aiNode* node, const aiScene* scene)
     {
         for (unsigned int i = 0; i < node->mNumMeshes; i++)
@@ -140,7 +161,7 @@ private:
         }
     }
 
-    // 处理网格（原有代码不变）
+    // 处理网格
     Mesh processMesh(aiMesh* mesh, const aiScene* scene)
     {
         vector<Vertex> vertices;
@@ -201,33 +222,52 @@ private:
                 indices.push_back(face.mIndices[j]);
         }
         
+
         // 材质
         aiMaterial* material = scene->mMaterials[mesh->mMaterialIndex];
-        
-        // 基础颜色贴图
-        vector<Texture> albedoMaps = loadMaterialTextures(material, aiTextureType_DIFFUSE, "texture_albedo");
-        textures.insert(textures.end(), albedoMaps.begin(), albedoMaps.end());
-        
-        // 法线贴图
-        std::vector<Texture> normalMaps = loadMaterialTextures(material, aiTextureType_HEIGHT, "texture_normal");
-        textures.insert(textures.end(), normalMaps.begin(), normalMaps.end());
-        
-        // 金属度贴图
-        vector<Texture> metallicMaps = loadMaterialTextures(material, aiTextureType_SPECULAR, "texture_metallic");
-        textures.insert(textures.end(), metallicMaps.begin(), metallicMaps.end());
 
-        //粗糙度贴图
-        std::vector<Texture> roughnessMaps = loadMaterialTextures(material, aiTextureType_SHININESS, "texture_roughness");
-        textures.insert(textures.end(), roughnessMaps.begin(), roughnessMaps.end());
 
-        // AO贴图
-        std::vector<Texture> aoMaps = loadMaterialTextures(material, aiTextureType_AMBIENT, "texture_ao");
-        textures.insert(textures.end(), aoMaps.begin(), aoMaps.end());
+            if (!gltf)
+            {
+                // 基础颜色贴图
+                vector<Texture> albedoMaps = loadMaterialTextures(material, aiTextureType_DIFFUSE, "texture_albedo");
+                textures.insert(textures.end(), albedoMaps.begin(), albedoMaps.end());
+
+                // 法线贴图
+                std::vector<Texture> normalMaps = loadMaterialTextures(material, aiTextureType_HEIGHT, "texture_normal");
+                textures.insert(textures.end(), normalMaps.begin(), normalMaps.end());
+
+                // 金属度贴图
+                vector<Texture> metallicMaps = loadMaterialTextures(material, aiTextureType_SPECULAR, "texture_metallic");
+                textures.insert(textures.end(), metallicMaps.begin(), metallicMaps.end());
+
+                //粗糙度贴图
+                std::vector<Texture> roughnessMaps = loadMaterialTextures(material, aiTextureType_SHININESS, "texture_roughness");
+                textures.insert(textures.end(), roughnessMaps.begin(), roughnessMaps.end());
+
+                // AO贴图
+                std::vector<Texture> aoMaps = loadMaterialTextures(material, aiTextureType_AMBIENT, "texture_ao");
+                textures.insert(textures.end(), aoMaps.begin(), aoMaps.end());
+            }
+            else
+            {
+                // 基础颜色贴图
+                vector<Texture> albedoMaps = loadMaterialTextures(material, aiTextureType_BASE_COLOR, "texture_albedo");
+                textures.insert(textures.end(), albedoMaps.begin(), albedoMaps.end());
+
+                // 法线贴图
+                std::vector<Texture> normalMaps = loadMaterialTextures(material, aiTextureType_NORMALS, "texture_normal");
+                textures.insert(textures.end(), normalMaps.begin(), normalMaps.end());
+
+                // 加载粗糙度纹理和金属度纹理（GLTF金属度/粗糙度通常合并为一张纹理，需拆分）
+                std::vector<Texture> roughness_metallicMaps = loadMaterialTextures(material, aiTextureType_GLTF_METALLIC_ROUGHNESS, "gltf_texture_metallic_roughness");
+                textures.insert(textures.end(), roughness_metallicMaps.begin(), roughness_metallicMaps.end());
+            }
 
         return Mesh(vertices, indices, textures);
     }
 
-    // 加载材质纹理（原有代码不变）
+    // 加载材质纹理
     vector<Texture> loadMaterialTextures(aiMaterial* mat, aiTextureType type, string typeName)
     {
         vector<Texture> textures;
@@ -260,7 +300,7 @@ private:
         return textures;
     }
 
-    // 新增：更新模型矩阵
+    //更新模型矩阵
     void updateModelMatrix()
     {
         // 重置矩阵
@@ -275,7 +315,7 @@ private:
     }
 };
 
-// 纹理加载函数（原有代码不变）
+// 纹理加载函数
 unsigned int TextureFromFile(const char* path, const string& directory, bool gamma)
 {
     string filename = string(path);

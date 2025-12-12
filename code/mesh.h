@@ -65,6 +65,7 @@ public:
         unsigned int normalNr = 1;
         unsigned int aoNr = 1;
         unsigned int roughnessNr = 1;
+        unsigned int gltfmetallroughNr = 1;
         for (unsigned int i = 0; i < textures.size(); i++)
         {
             glActiveTexture(GL_TEXTURE0 + i); // active proper texture unit before binding
@@ -81,6 +82,9 @@ public:
                 number = std::to_string(aoNr++); // transfer unsigned int to string
             else if (name == "texture_roughness")
                 number = std::to_string(roughnessNr++);
+            else if (name == "gltf_texture_metallic_roughness")
+                number = std::to_string(gltfmetallroughNr++);
+                
             // now set the sampler to the correct texture unit
             glUniform1i(glGetUniformLocation(shader.ID, (name + number).c_str()), i);
             // and finally bind the texture
@@ -138,7 +142,6 @@ private:
         // ids
         glEnableVertexAttribArray(5);
         glVertexAttribIPointer(5, 4, GL_INT, sizeof(Vertex), (void*)offsetof(Vertex, m_BoneIDs));
-
         // weights
         glEnableVertexAttribArray(6);
         glVertexAttribPointer(6, 4, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, m_Weights));
